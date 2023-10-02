@@ -1,0 +1,135 @@
+###############----------------------------all functions defined here-------------------#######################################
+
+multi.which = function(A){
+#https://www.r-bloggers.com/2011/09/a-multidimensional-which-function/
+    if ( is.vector(A) ) return(which(A))
+    d <- dim(A)
+    T <- which(A) - 1
+    nd <- length(d)
+    t( sapply(T, function(t){
+        I <- integer(nd)
+        I[1] <- t %% d[1]
+        sapply(2:nd, function(j){
+            I[j] <<- (t %/% prod(d[1:(j-1)])) %% d[j]
+        })
+        I
+    }) + 1 )
+}
+
+
+spherePix = function(vox,Rmax){
+  require(pracma)
+  start_time <- Sys.time()
+  vox=vox/min(vox)
+  MG = meshgrid(-Rmax:Rmax,-Rmax:Rmax)
+  X = array(MG$X,dim=c(length(-Rmax:Rmax),length(-Rmax:Rmax),length(-Rmax:Rmax)))
+  Y = array(MG$Y,dim=c(length(-Rmax:Rmax),length(-Rmax:Rmax),length(-Rmax:Rmax)))
+  Z = array(rep(-Rmax:Rmax,each=length(-Rmax:Rmax)^2),dim=c(length(-Rmax:Rmax),length(-Rmax:Rmax),length(-Rmax:Rmax)))
+  pxls = matrix(c(0,0,0,0),1,4)
+ 
+  for(r in seq(0,Rmax,by=0.01)){
+    circle = ((X*vox[1])^2 + (Y*vox[2])^2 + (Z*vox[3])^2 <= r^2)*((X*vox[1])^2 + (Y*vox[2])^2 + (Z*vox[3])^2 > (r-0.01)^2)
+    x = as.vector(X/circle);x = x[is.finite(x)];
+    y = as.vector(Y/circle);y = y[is.finite(y)];
+    z = as.vector(Z/circle);z = z[is.finite(z)];
+    pxls = rbind(pxls,matrix(c(rep(r,length(x)),x,y,z),length(x),4))
+    print(round(r/Rmax,2))
+  }
+end_time <- Sys.time()
+print(paste0('spherePix calculation ',end_time-start_time))
+return(pxls)
+}
+
+
+px2vec = function(i,j,k,A){i + (j-1)*dim(A)[1] + (k-1)*dim(A)[1]*dim(A)[2]}
+vec2px = function(n,A){s = ceiling(n/(dim(A)[1]*dim(A)[2]));n = n - (s-1)*(dim(A)[2]*dim(A)[1]);c = ceiling(n/dim(A)[1]);r = n - (c-1)*dim(A)[1];return(c(r,c,s))}
+
+calculateDDI = function(defectArray,vox,Rmax,...){
+  z = list(...)
+  cutoff = 0.5
+  mrr = 0
+  if(!is.null(z$cutoff)){cutoff = z$cutoff;}
+   
+ 
+  ## -- find list of sphere pixels given voxel dimensions
+  spherePx = spherePix(vox,Rmax)
+ 
+  ## -- create a list of all defect voxels, and convert that list to a vector -- ##
+  defList = multi.which(defectArray==1)
+  defVec = px2vec(defList[,1],defList[,2],defList[,3],defectArray)
+ 
+ ## -- create a DDI array to store calculated DDI values
+  DDI = defectArray*0
+ 
+  ## -- What are all the indices in the 'spherePx' matrix at which there is a change in radius? Find out and store in sphereRads -- ##
+  sphereRads = unique((diff(spherePx[,1])>0)*(2:dim(spherePx)[1]));sphereRads = sphereRads[sphereRads>0]-1
+ 
+  ## -- for every defect Voxel, lets grow a sphere and find out the fraction of defect voxels within the sphere -- ##
+  maxR = 0
+  start_time <- Sys.time()
+  for(k in 1:dim(defList)[1]){
+    print(paste0(k,'/',dim(defList)[1]))
+ 
+    ## - pull a defect voxel row/col/slice to examine
+    r0 = defList[k,1]
+    c0 = defList[k,2]
+    s0 = defList[k,3]
+    sphereVec = px2vec(spherePx[,2]+r0,spherePx[,3]+c0,spherePx[,4]+s0,defectArray)
+ 
+    ## - Let's increase the radius and see what fraction of sphere voxels contain defect voxels
+    for(ii in sphereRads){
+      ## - what fraction of voxels within the sphere are defect?
+      C = length(intersect(sphereVec[1:ii],defVec))/length(sphereVec[1:ii])
+ 
+      ## - if that fraction is less than half, break the radius loop
+      if(C<cutoff){break}
+    }
+ 
+  ## - what radius did we get to before breaking the loop? store that radius in the DDI array at our defect voxel location
+  DDI[r0,c0,s0] = spherePx[ii,1]
+  maxR = spherePx[ii,1]*(spherePx[ii,1]>maxR) + maxR*(spherePx[ii,1]<=maxR)
+  if(ii==max(sphereRads)){print('MAX RADIUS REACHED');mrr=1;}
+  print(paste0('Max Radius: ',maxR)) #If this number gets up to the max sphere radius in spherePx you may need to run again with bigger spherePx matrix
+  end_time <- Sys.time()
+  }
+print(paste0('DDI calculation ',end_time-start_time))
+return(list(DDI = DDI,maxR=maxR,mrr=mrr))
+}
+
+
+######################-----ANALYSIS BEGINS HERE-----######################################
+fileList = dir('C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\DataAnalysis\\230428_VDPanalysis\\COPD_rfiles\\',pattern = ".RData", full.names=T, recursive = T)
+
+print(fileList[i])
+previous = load(fileList[i])
+HP = hpg
+Mask = mask
+
+Rmax=40
+
+corDDI = calculateDDI(defectArray, vox, Rmax)
+corCVvol = (corDDI$DDI*min(vox))^3*(4*pi/3) # - convert distance to volume
+corLungVolume = sum(Mask)*prod(vox) # - calculate volume of lung
+corCVlist = corCVvol[(defectArray)>0] # - make list of CV's
+corCVlist = corCVlist[order(corCVlist)] # - sort list of CV's
+corCI = corCVlist[round(0.95*length(corCVlist))]/corLungVolume*100 # - CI is 95th percentile value (normalize to lung volume)
+
+corvolNDDI = (corCVvol/corLungVolume)*100   ###for images
+
+
+#####################---------------for axial CI calculationo on same isotropic data--------------########################
+axDDI = calculateDDI(aperm(defectArray,c(2,3,1)), vox[c(2,3,1)], Rmax)
+axCVvol = (axDDI$DDI*min(vox))^3*(4*pi/3) # - convert distance to volume
+axLungVolume = sum(Mask)*prod(vox) # - calculate volume of lung
+axCVlist = axCVvol[aperm(defectArray,c(2,3,1))>0] # - make list of CV's
+axCVlist = axCVlist[order(axCVlist)] # - sort list of CV's
+axCI = axCVlist[round(0.95*length(axCVlist))]/axLungVolume*100 # - CI is 95th percentile value (normalize to lung volume)
+
+axvolNDDI = (axCVvol/axLungVolume)*100   ###for images
+
+id[i]=id
+
+save(list=c(previous),corvolNDDI, corDDI,corCVvol,corLungVolume,corCVlist,corCI, axDDI,axCVvol,axLungVolume,axCVlist,axCI,axvolNDDI, Rmax, file=paste0('C:/Users/gmg9r2/OneDrive - University of Missouri/Manuscripts/CI_method/DataAnalysis/230428_VDPanalysis/COPD_ci/',id[i],'.RData'))
+
+}
+
