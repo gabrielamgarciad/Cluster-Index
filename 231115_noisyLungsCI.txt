@@ -1,0 +1,230 @@
+multi.which = function(A){
+    #https://www.r-bloggers.com/2011/09/a-multidimensional-which-function/
+    if ( is.vector(A) ) return(which(A))
+        d <- dim(A)
+        T <- which(A) - 1
+        nd <- length(d)
+        t( sapply(T, function(t){
+        I <- integer(nd)
+        I[1] <- t %% d[1]
+        sapply(2:nd, function(j){
+        I[j] <<- (t %/% prod(d[1:(j-1)])) %% d[j]
+        })
+        I
+    }) + 1 )
+}
+
+quadShift3D = function(A,...){
+  require(abind)
+
+  z = list(...)
+
+  Nr = 0;Nc = 0;Ns = 0;
+  if(!is.null(z$Nr)){Nr = z$Nr}
+  if(!is.null(z$Nc)){Nc = z$Nc}
+  if(!is.null(z$Ns)){Ns = z$Ns}
+
+  if(is.null(z$Nr) && is.null(z$Nc) && is.null(z$Ns)){
+  Nr = dim(A)[1]/2
+  Nc = dim(A)[2]/2
+  Ns = dim(A)[3]/2
+  }
+
+  if(Nr<0){for(k in 1:(-Nr)){A = abind(A[2:dim(A)[1],,],A[1,,],along=1)}}
+  if(Nr>0){for(k in 1:Nr   ){A = abind(A[dim(A)[1],,],A[1:(dim(A)[1]-1),,],along=1)}}
+  if(Nc<0){for(k in 1:(-Nc)){A = abind(A[,2:dim(A)[2],],A[,1,],along=2)}}
+  if(Nc>0){for(k in 1:Nc   ){A = abind(A[,dim(A)[2],],A[,1:(dim(A)[2]-1),],along=2)}}
+  if(Ns<0){for(k in 1:(-Ns)){A = abind(A[,,2:dim(A)[3]],A[,,1],along=3)}}
+  if(Ns>0){for(k in 1:Ns   ){A = abind(A[,,dim(A)[3]],A[,,1:(dim(A)[3]-1)],along=3)}}
+
+  return(A)
+}
+
+
+
+spherePix = function(vox,Rmax){
+  require(pracma)
+  print(paste0('Beginning SpherePix calculation with Rmax = ',Rmax,'...'))
+  start_time = Sys.time()
+  vox=vox/min(vox)
+  MG = meshgrid(-Rmax:Rmax,-Rmax:Rmax)
+  X = array(MG$X,dim=c(length(-Rmax:Rmax),length(-Rmax:Rmax),length(-Rmax:Rmax)))
+  Y = array(MG$Y,dim=c(length(-Rmax:Rmax),length(-Rmax:Rmax),length(-Rmax:Rmax)))
+  Z = array(rep(-Rmax:Rmax,each=length(-Rmax:Rmax)^2),dim=c(length(-Rmax:Rmax),length(-Rmax:Rmax),length(-Rmax:Rmax)))
+  pxls = matrix(c(0,0,0,0),1,4)
+
+  for(r in seq(0,Rmax,by=0.01)){
+    circle = ((X*vox[1])^2 + (Y*vox[2])^2 + (Z*vox[3])^2 <= r^2)*((X*vox[1])^2 + (Y*vox[2])^2 + (Z*vox[3])^2 > (r-0.01)^2)
+    x = X[circle==1]
+    y = Y[circle==1]
+    z = Z[circle==1]
+    pxls = rbind(pxls,matrix(c(rep(r,length(x)),x,y,z),length(x),4))
+    #print(round(r/Rmax,2))
+  }
+  end_time = Sys.time()
+  print(paste0('SpherePix calculation time: ',round(end_time-start_time,2),' seconds'))
+  return(pxls)
+}
+
+px2vec = function(i,j,k,A){i + (j-1)*dim(A)[1] + (k-1)*dim(A)[1]*dim(A)[2]}
+
+vec2px = function(n,A){s = ceiling(n/(dim(A)[1]*dim(A)[2]));n = n - (s-1)*(dim(A)[2]*dim(A)[1]);c = ceiling(n/dim(A)[1]);r = n - (c-1)*dim(A)[1];return(c(r,c,s))}
+
+calculateDDI = function(defectArray,vox,...){
+    z = list(...)
+    Rmax = 5
+    cutoff = 0.5
+    if(!is.null(z$cutoff)){cutoff = z$cutoff;}
+
+    ## -- create a list of all defect voxels, and convert that list to a vector -- ##
+    defList = multi.which(defectArray==1)
+    defVec = px2vec(defList[,1],defList[,2],defList[,3],defectArray)
+
+    ## -- create a DDI array to store calculated DDI values
+    DDI = defectArray*0
+
+    ## -- find list of sphere pixels given voxel dimensions
+    spherePx = spherePix(vox,Rmax)
+
+    ## -- What are all the indices in the 'spherePx' matrix at which there is a change in radius? Find out and store in sphereRads -- ##
+    sphereRads = unique((diff(spherePx[,1])>0)*(2:dim(spherePx)[1]));sphereRads = sphereRads[sphereRads>0]-1
+
+    ## -- for every defect Voxel, lets grow a sphere and find out the fraction of defect voxels within the sphere -- ##
+    print('beginning CI calculation...')
+    start_time = Sys.time()
+    newprogress = 100;maxR = 0;
+    for(k in 1:dim(defList)[1]){
+
+        ## - pull a defect voxel row/col/slice to examine
+        r0 = defList[k,1]
+        c0 = defList[k,2]
+        s0 = defList[k,3]
+
+        ## - convert all the voxels in the sphere centered at the defect voxel into a vector
+        sphereVec = px2vec(spherePx[,2]+r0,spherePx[,3]+c0,spherePx[,4]+s0,defectArray)
+
+        ## - Let's increase the radius and see what fraction of sphere voxels contain defect voxels
+        growBreak = 0;
+        for(ii in sphereRads){
+            ## - what fraction of voxels within the sphere are defect?
+            C = length(intersect(sphereVec[1:ii],defVec))/length(sphereVec[1:ii])
+
+            ## - if that fraction is less than half, break the radius loop
+            if(C<cutoff){growBreak = 1;break;}
+        }#sphereGrowing for loop
+
+        ## - If the sphere-growing for loop didnt break, we hit max radius and we have to try again. Break the defect voxel loop
+        if(growBreak == 0){
+            print('--MAX RADIUS REACHED--');
+            Rmax = ceiling(Rmax*1.2)
+            spherePx = spherePix(vox,Rmax)
+            sphereRads = unique((diff(spherePx[,1])>0)*(2:dim(spherePx)[1]));sphereRads = sphereRads[sphereRads>0]-1;
+            k = k-1
+        }
+        if(growBreak == 1){
+            ## - what radius did we get to before breaking the loop? store that radius in the DDI array at our defect voxel location
+            DDI[r0,c0,s0] = spherePx[ii,1]
+            
+            ## - if this radius is the biggest we've seen so far, update maxR
+            maxR = spherePx[ii,1]*(spherePx[ii,1]>maxR) + maxR*(spherePx[ii,1]<=maxR)
+        }
+        
+        ## -- update the progress counter
+        progress = round(k/dim(defList)[1],1);if(newprogress!=progress){ print(paste0('Progress: ',progress));newprogress = progress;};
+
+    }# defectVoxel List for loop
+
+
+
+
+    end_time = Sys.time()
+    print(paste0('DDI calculation time: ',round(difftime(end_time,start_time,units='min'),2),' min'))
+    print('')
+    return(list(DDI = DDI,maxR=maxR))
+}
+
+## ------------ ##
+## -- Script -- ##
+## ------------ ##
+
+require(pracma)
+
+mg = meshgrid(1:100,1:100)
+X = array(mg$X, dim = c(100,100,100))
+Y = array(mg$Y, dim = c(100,100,100))
+Z = array(rep(1:100, each = 100*100), dim = c(100,100,100))
+## -- create a spherical mask array
+circle = ((X-50)^2 + (Y-50)^2 + (Z-50)^2) < 40^2
+
+## -- create a 3D lung mask array
+mymask = mask[14:100,,]
+circle = array(0,dim=c(100,100,100))
+circle[1:87, 1:88, 1:60]=mymask
+#makeSlide(circle)
+
+vox = c(3.9,3.9,3.9)
+VDPtargets = seq(0.15,0.2,by=0.05) ## - list of VDP's to create masks for
+NN = c(0,1,3,5,8,15,49) ## -- list of 'clusteriness' to try
+vdps = array(0,dim=c(length(NN),length(VDPtargets),3))
+
+#noisyCircles = array(NA,dim=c(100,100,100,length(NN),length(VDPtargets),3))
+load("C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\NoisyLungs\\231114_noisyCircles_lungs.RData")
+#load("C:\\PIRL\\R\\231101.RData")
+for (rep in 2:dim(noisyCircles)[6]){
+    for(v in 1:dim(noisyCircles)[5]){
+        VDPtarget = VDPtargets[v]
+        for (N in 1:dim(noisyCircles)[4]){
+		if(NN[N] == 0){noisyCircle = ((X-50)^2 + (Y-50)^2 + (Z-50)^2) < (40^3 * VDPtarget)^(2/3)}
+		else{
+            size = (50-NN[N]):(50+NN[N])
+            noiseF = array(0,dim=c(100,100,100))
+            noiseF[size,size,size] = complex(real = array(rnorm(length(size)^3,0,1),dim = c(length(size),length(size),length(size))),imaginary = array(rnorm(length(size)^3,0,1),dim = c(length(size),length(size),length(size))))
+            noise = fft(quadShift3D(noiseF),inverse=TRUE)
+            thresh = -0.8
+            repeat{
+                noisyCircle = circle*(Re(noise)>thresh)
+                vdp = sum(noisyCircle)/sum(circle)
+                if((vdp > (VDPtarget-0.001)) && (vdp < (VDPtarget+0.001))){break;}
+                thresh = thresh - (vdp < VDPtarget)/100 + (vdp > VDPtarget)/100
+                #print(sprintf('thresh = %0.2f --- VDP = %0.2f',thresh,vdp*100))
+            }
+		    }   
+            im(noisyCircle[,,50])
+       	    print(paste0('vdp = ',round(vdp*100),' ---- N = ',N,'/13 ---- rep = ',rep,'/3'))
+            vdps[N,v,rep] = vdp
+            noisyCircles[,,,N,v,rep] = noisyCircle
+        }#for N
+    }#for vdp
+save(noisyCircles, vdps, vox, file='C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\NoisyLungs\\231114_noisyCircles_lungs.RData')
+}#for rep
+
+
+
+load('C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\NoisyLungs\\231114_noisyCircles_lungs.RData')
+#load('C:\\PIRL\\R\\231101.RData')
+
+results = array(0, dim=c(dim(noisyCircles)[4],dim(noisyCircles)[5],dim(noisyCircles)[6],2))
+CIarrays = noisyCircles*0
+save(CIarrays,results,file='C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\NoisyLungs\\231114_noisylungs_CI.RData')
+
+#RMAX = 5
+vox = c(3.9,3.9,3.9)
+for(r in 1:dim(noisyCircles)[6]){
+    for (v in 1:dim(noisyCircles)[5]){
+        for (n in 1:dim(noisyCircles)[4]){
+            A = calculateDDI(noisyCircles[,,,n,v,r],vox,5) #--------------------Calcualte CI array
+            #RMAX = round(A$maxR*1.2)
+            load('C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\NoisyLungs\\231114_noisylungs_CI.RData')
+            CIarrays[,,,n,v,r] = (A$DDI*min(vox))^3*(4*pi/3) #-----------------------Full 3D CI array in units of sphere volume
+            makeSlide(CIarrays[,,,n,v,r],COL=colorList$parula)
+            LungVolume = sum(circle)*prod(vox) # --------------------------------------Volume of lung (just mask sum*voxel volume)
+            CVlist = CIarrays[,,,n,v,r][(noisyCircles[,,,n,v,r])>0] # ----------------------------list of CVs
+            CVlist = CVlist[order(CVlist)] # ----------------------------------------sort list of CV's
+            results[n,v,r,1] = sum(noisyCircles[,,,n,v,r])/sum(circle) # -----------------------------------------------VDP
+            results[n,v,r,2] = CVlist[round(0.95*length(CVlist))]/LungVolume*100#----CI is 95th cercentile CV as a percentage of total lung volume
+            save(list = c(previous),CIarrays,CVvolume, results, file='C:\\Users\\gmg9r2\\OneDrive - University of Missouri\\Manuscripts\\CI_method\\NoisyLungs\\231114_noisylungs_CI.RData')
+            print(paste0('vdp = ',round(results[n,v,r,1] *100),' ---- N = ',n,'/13 ---- rep = ',r,'/3'))
+        } #for n
+    } #for v
+} #for r
+
