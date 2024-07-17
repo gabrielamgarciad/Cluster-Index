@@ -1,8 +1,0 @@
-## -- small script to convert any R array to a numpy array to be read in python
-## -- Here used to convert the noisyCircles array for CI analysis
-## -- RPT, 11/19/2023
-install.packages('reticulate')
-require(reticulate)
-np = import('numpy')
-noisyCircles = np$array(noisyCircles)
-np$save('C:/pirl/R/noisyCirlces.npy',noisyCircles)
